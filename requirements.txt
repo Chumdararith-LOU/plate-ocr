@@ -1,0 +1,5 @@
+# On the RTX 4090 server, pip's default torch wheels include CUDA.
+ultralytics>=8.3
+torch>=2.2
+torchvision
+opencv-python

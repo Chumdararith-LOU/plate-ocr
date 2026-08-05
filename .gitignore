@@ -1,0 +1,15 @@
+# dataset and generated artifacts (synced separately, not via git)
+DataSet/
+data/
+runs/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# pretrained/trained weights (auto-downloaded by ultralytics; too big for git)
+*.pt
+
+# macos
+.DS_Store
