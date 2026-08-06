@@ -60,7 +60,7 @@ def main():
     idx = 0
     with torch.no_grad():
         for imgs, _, texts in dl:
-            probs = model(imgs.to(device)).softmax(2)
+            probs = model(imgs.to(device)).softmax(2).permute(1, 0, 2)
             for b, text in enumerate(texts):
                 p = probs[b]
                 ids = p.argmax(1).cpu().tolist()
