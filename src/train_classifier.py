@@ -41,6 +41,7 @@ def parse_target(text: str) -> str:
 class PlateDataset(Dataset):
     def __init__(self, csv_path: Path, class_to_idx: dict, tfm, limit=None):
         self.rows, self.tfm, self.class_to_idx = [], tfm, class_to_idx
+        self.idx_to_cls = {i: c for c, i in class_to_idx.items()}
         self.img_dir = OCR_DIR / csv_path.stem
         with open(csv_path, newline="") as f:
             for row in csv.DictReader(f):
@@ -67,11 +68,15 @@ def build_model(num_classes: int) -> nn.Module:
 
 @torch.no_grad()
 def evaluate(model, loader, device):
-    """Returns (loss, accuracy, per-class [correct, total])."""
+    """Returns (loss, accuracy, per-class [correct, total], errors Counter).
+
+    errors maps (true_class, pred_class) -> count for mispredictions only.
+    """
     model.eval()
     loss_fn = nn.CrossEntropyLoss()
     total, correct, total_loss = 0, 0, 0.0
-    per_class = {}
+    per_class, errors = {}, Counter()
+    idx_to_cls = loader.dataset.idx_to_cls
     for imgs, labels, names in loader:
         imgs, labels = imgs.to(device), labels.to(device)
         logits = model(imgs)
@@ -84,7 +89,9 @@ def evaluate(model, loader, device):
             c = per_class.setdefault(name, [0, 0])
             c[1] += 1
             c[0] += int(pred == label)
-    return total_loss / max(total, 1), correct / max(total, 1), per_class
+            if pred != label:
+                errors[(name, idx_to_cls[pred])] += 1
+    return total_loss / max(total, 1), correct / max(total, 1), per_class, errors
 
 
 def main():
@@ -156,7 +163,7 @@ def main():
             correct += (logits.argmax(1) == labels).sum().item()
             total += len(labels)
         sched.step()
-        val_loss, acc, _ = evaluate(model, val_dl, device)
+        val_loss, acc, _, _ = evaluate(model, val_dl, device)
         print(f"epoch {epoch}/{args.epochs} "
               f"train_loss={total_loss / max(total, 1):.4f} "
               f"train_acc={correct / max(total, 1):.4f} "
@@ -175,11 +182,16 @@ def main():
         model.load_state_dict(ckpt["model"])
         test_ds = PlateDataset(test_path, class_to_idx, val_tfm)
         test_dl = DataLoader(test_ds, batch_size=args.batch, num_workers=args.workers)
-        _, acc, per_class = evaluate(model, test_dl, device)
+        _, acc, per_class, errors = evaluate(model, test_dl, device)
         print(f"test_acc={acc:.4f} ({len(test_ds)} samples)")
         report = {name: {"acc": c[0] / c[1], "n": c[1]}
                   for name, c in sorted(per_class.items())}
         (RUN_DIR / "test_report.json").write_text(json.dumps(report, indent=2))
+        confusion = {f"{true} -> {pred}": n
+                     for (true, pred), n in errors.most_common()}
+        (RUN_DIR / "test_confusion.json").write_text(
+            json.dumps(confusion, indent=2))
+        print(f"top confusions: {confusion and list(confusion)[:5]}")
 
 
 if __name__ == "__main__":
