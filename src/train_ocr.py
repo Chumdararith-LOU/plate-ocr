@@ -5,7 +5,7 @@ Targets are province strings parsed from labels, e.g.
     train_licence_plate_banteay_meanchey_73 -> "banteay meanchey"
 
 Smoke test:  python src/train_ocr.py --epochs 1 --limit 64
-Full run:    python src/train_ocr.py --epochs 100
+Full run:    python src/train_ocr.py
 """
 import argparse
 import csv
@@ -81,15 +81,16 @@ class CRNN(nn.Module):
     def __init__(self, vocab_size: int):
         super().__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2, 2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2, 2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d((2, 1), (2, 1)),
+            nn.Conv2d(3, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d(2, 2),
             nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(), nn.MaxPool2d((2, 1), (2, 1)),
+            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(),
+            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, None)),
         )
-        self.rnn = nn.LSTM(256, 128, num_layers=2, bidirectional=True)
-        self.fc = nn.Linear(256, vocab_size + 1)
+        self.rnn = nn.LSTM(512, 256, num_layers=2, bidirectional=True, dropout=0.2)
+        self.fc = nn.Linear(512, vocab_size + 1)
 
     def forward(self, x):
         x = self.cnn(x).squeeze(2).permute(2, 0, 1)
@@ -129,11 +130,12 @@ def run_epoch(model, loader, device, train: bool, opt=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--epochs", type=int, default=100)
+    ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--height", type=int, default=32)
-    ap.add_argument("--width", type=int, default=160)
+    ap.add_argument("--width", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--device", default=None)
     ap.add_argument("--limit", type=int, default=None, help="cap samples (smoke test)")
@@ -148,7 +150,10 @@ def main():
 
     train_tfm = transforms.Compose([
         transforms.Resize((args.height, args.width)),
-        transforms.ColorJitter(0.3, 0.3, 0.3),
+        transforms.RandomPerspective(0.1, p=0.3),
+        transforms.RandomAffine(degrees=5, translate=(0.05, 0.1), scale=(0.9, 1.1)),
+        transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+        transforms.GaussianBlur(3),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
@@ -166,7 +171,8 @@ def main():
                         collate_fn=collate)
 
     model = CRNN(len(vocab)).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr,
+                           weight_decay=args.weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
     RUN_DIR.mkdir(parents=True, exist_ok=True)
