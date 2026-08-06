@@ -18,7 +18,8 @@ def run(cmd):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--epochs", type=int, default=100)
+    ap.add_argument("--epochs", type=int, default=100, help="detector epochs")
+    ap.add_argument("--ocr-epochs", type=int, default=300)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--test-image", default=None,
@@ -32,7 +33,7 @@ def main():
         run([py, "src/prepare_data.py"])
     run([py, "src/train_detect.py", "--epochs", str(args.epochs),
          "--imgsz", str(args.imgsz), "--batch", str(args.batch)])
-    run([py, "src/train_ocr.py", "--epochs", str(args.epochs)])
+    run([py, "src/train_ocr.py", "--epochs", str(args.ocr_epochs)])
     if args.test_image:
         run([py, "src/inference.py", "--source", args.test_image])
     print("\nAll done. Weights: runs/detect/plate/weights/best.pt, "

@@ -11,6 +11,7 @@ import argparse
 import csv
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -18,7 +19,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import torch
 import torch.nn as nn
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -130,11 +131,11 @@ def run_epoch(model, loader, device, train: bool, opt=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--epochs", type=int, default=200)
+    ap.add_argument("--epochs", type=int, default=300)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--height", type=int, default=32)
     ap.add_argument("--width", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--device", default=None)
@@ -165,7 +166,10 @@ def main():
 
     train_ds = OcrDataset(OCR_DIR / "train.csv", vocab, train_tfm, args.limit)
     val_ds = OcrDataset(OCR_DIR / "val.csv", vocab, val_tfm, args.limit)
-    train_dl = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
+    counts = Counter(t for _, t in train_ds.rows)
+    weights = [1.0 / counts[t] for _, t in train_ds.rows]
+    sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
+    train_dl = DataLoader(train_ds, batch_size=args.batch, sampler=sampler,
                           num_workers=args.workers, pin_memory=True, collate_fn=collate)
     val_dl = DataLoader(val_ds, batch_size=args.batch, num_workers=args.workers,
                         collate_fn=collate)
@@ -173,7 +177,7 @@ def main():
     model = CRNN(len(vocab)).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr,
                            weight_decay=args.weight_decay)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=50, T_mult=2)
 
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     (RUN_DIR / "vocab.json").write_text(json.dumps({"vocab": vocab}))
