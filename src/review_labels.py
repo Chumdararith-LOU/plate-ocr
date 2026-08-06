@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Interactively review flagged images from audit_labels.py and fix the CSV.
+"""Review flagged images from audit_labels.py and fix the CSV.
 
-Shows each flagged crop. Keys:
-    Enter/Space  keep the label
-    c            correct the label to the model's prediction
-    d            drop the sample from the split
-    q            stop and save
+Two ways to view the flagged images:
+    --html out.html   generate a self-contained web page with all flagged crops
+    (default)         terminal prompts; open each image yourself (e.g. in VS Code)
+
+Answers:  Enter=keep  c=accept model prediction  d=drop sample  q=save and quit
 
 Usage:  python src/review_labels.py --split val [--min-conf 0.95] [--retrain]
 """
 import argparse
+import base64
 import csv
 import subprocess
 import sys
 from pathlib import Path
-
-import cv2
-import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 OCR_DIR = ROOT / "data" / "ocr"
@@ -33,22 +31,33 @@ def corrected_text(text: str, pred: str) -> str:
                      pred.replace(" ", "_"), parts[-1]])
 
 
-def render(img, fname, label, pred, conf):
-    h, w = img.shape[:2]
-    scale = max(240 / h, 640 / w, 1.0)
-    disp = cv2.resize(img, (int(w * scale), int(h * scale)),
-                      interpolation=cv2.INTER_CUBIC)
-    header = np.full((100, max(disp.shape[1], 700), 3), 40, np.uint8)
-    if disp.shape[1] < header.shape[1]:
-        disp = cv2.copyMakeBorder(disp, 0, 0, 0, header.shape[1] - disp.shape[1],
-                                  cv2.BORDER_CONSTANT, value=(40, 40, 40))
-    cv2.putText(header, f"{fname}  conf={conf}", (10, 28),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    cv2.putText(header, f"label: {label}", (10, 58),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(header, f"pred:  {pred}", (10, 88),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    return np.vstack([header, disp])
+def write_html(flags, img_dir, out_path):
+    cards = []
+    for fl in flags:
+        p = img_dir / fl["filename"]
+        if not p.exists():
+            continue
+        b64 = base64.b64encode(p.read_bytes()).decode()
+        cards.append(f"""
+        <div class="card">
+          <div><b>{fl['filename']}</b> conf={fl['conf']}</div>
+          <div class="label">label: {fl['label']}</div>
+          <div class="pred">pred:  {fl['pred']}</div>
+          <img src="data:image/jpeg;base64,{b64}">
+        </div>""")
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>flagged labels</title><style>
+body {{ font-family: monospace; background: #222; color: #eee; }}
+.card {{ display: inline-block; margin: 10px; padding: 10px; background: #333;
+        border: 1px solid #555; vertical-align: top; }}
+.card img {{ max-width: 480px; image-rendering: pixelated;
+            display: block; margin-top: 6px; }}
+.label {{ color: #7f7; }} .pred {{ color: #f77; }}
+</style></head><body>
+<h1>{len(flags)} flagged samples</h1>{''.join(cards)}
+</body></html>"""
+    Path(out_path).write_text(html)
+    print(f"wrote {out_path} -- open it in a browser to inspect the images")
 
 
 def main():
@@ -59,8 +68,10 @@ def main():
     ap.add_argument("--min-conf", type=float, default=0.9,
                     help="only review flags with confidence above this")
     ap.add_argument("--max", type=int, default=None, help="review at most N flags")
+    ap.add_argument("--html", default=None,
+                    help="write an HTML contact sheet and exit (no editing)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="list flags without showing images")
+                    help="list flags without prompting")
     ap.add_argument("--retrain", action="store_true",
                     help="run train_ocr.py after saving corrections")
     args = ap.parse_args()
@@ -72,6 +83,10 @@ def main():
         flags = flags[:args.max]
     print(f"{len(flags)} flags with conf >= {args.min_conf}")
 
+    img_dir = OCR_DIR / args.split
+    if args.html:
+        write_html(flags, img_dir, args.html)
+        return
     if args.dry_run:
         for fl in flags:
             print(f"  {fl['conf']}  {fl['label']:<20} -> {fl['pred']:<20}  {fl['filename']}")
@@ -80,7 +95,6 @@ def main():
     split_csv = OCR_DIR / f"{args.split}.csv"
     rows = load_csv(split_csv)
     by_fname = {r["filename"]: r for r in rows}
-    img_dir = OCR_DIR / args.split
     drop = set()
     kept = fixed = 0
 
@@ -88,23 +102,26 @@ def main():
         fname, label, pred, conf = fl["filename"], fl["label"], fl["pred"], fl["conf"]
         if fname not in by_fname or fname in drop:
             continue
-        img = cv2.imread(str(img_dir / fname))
-        if img is None:
+        if not (img_dir / fname).exists():
             print(f"missing image: {fname}")
             continue
-        cv2.imshow(f"[{i}/{len(flags)}]  keep=Enter  fix=c  drop=d  quit=q",
-                   render(img, fname, label, pred, conf))
-        key = cv2.waitKey(0) & 0xFF
-        cv2.destroyAllWindows()
-        if key == ord("q"):
+        print(f"\n[{i}/{len(flags)}] {fname}  conf={conf}")
+        print(f"  label: {label}")
+        print(f"  pred:  {pred}")
+        print(f"  image: {img_dir / fname}")
+        while True:
+            key = input("  keep=Enter  fix=c  drop=d  quit=q > ").strip().lower()
+            if key in ("", "c", "d", "q"):
+                break
+        if key == "q":
             break
-        if key == ord("c"):
+        if key == "c":
             by_fname[fname]["text"] = corrected_text(by_fname[fname]["text"], pred)
             fixed += 1
-            print(f"fixed   {fname}: {label} -> {pred}")
-        elif key == ord("d"):
+            print(f"  fixed   {fname}: {label} -> {pred}")
+        elif key == "d":
             drop.add(fname)
-            print(f"dropped {fname}")
+            print(f"  dropped {fname}")
         else:
             kept += 1
 
