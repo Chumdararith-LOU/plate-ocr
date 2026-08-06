@@ -11,5 +11,11 @@ __pycache__/
 # pretrained/trained weights (auto-downloaded by ultralytics; too big for git)
 *.pt
 
+# generated review artifacts (contact sheets from review_labels.py)
+flags_*.html
+
+# local tool config
+opencode.json
+
 # macos
 .DS_Store
