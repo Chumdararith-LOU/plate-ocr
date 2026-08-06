@@ -100,9 +100,9 @@ class CRNN(nn.Module):
 
 def run_epoch(model, loader, device, train: bool, opt=None):
     model.train(train)
-    loss_fn = nn.CTCLoss(zero_infinity=True)
     total, correct, n_chars, n_err, total_loss = 0, 0, 0, 0, 0.0
     vocab_len = model.fc.out_features - 1
+    loss_fn = nn.CTCLoss(blank=vocab_len, zero_infinity=True)
     vocab = loader.dataset.vocab
     for imgs, targets, texts in loader:
         imgs = imgs.to(device)
